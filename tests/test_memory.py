@@ -116,3 +116,39 @@ def test_conflict_resolution(mgr: MemoryManager) -> None:
     )
     assert rows[1]["type"] == "project_negative"
     assert rows[1]["status"] == "active"
+
+
+# ---------- 7. created_at 被尊重 + 影响时间衰减 ----------
+
+def test_respects_caller_provided_created_at(mgr: MemoryManager) -> None:
+    """题目要求消息至少包含 created_at;此处验证它真的被尊重,且参与 recency 排序。"""
+    # 同一个 profile + 同一个 query 命中度,只靠 created_at 拉开排名
+    mgr.add_feedback({
+        "profile_id": "A",
+        "session_id": "s1",
+        "message": "OpenAI 项目可以推进,约一下",
+        "created_at": "2026-04-25T10:00:00Z",   # 17 天前
+    })
+    mgr.add_feedback({
+        "profile_id": "A",
+        "session_id": "s1",
+        "message": "Mistral 项目可以推进,约一下",
+        "created_at": "2026-05-10T10:00:00Z",   # 2 天前
+    })
+
+    # 落库的 updated_at 应等于传入的 created_at(Z 归一化为 +00:00 后)
+    with mgr.storage.connect() as conn:
+        rows = conn.execute(
+            "SELECT content, updated_at FROM memories WHERE profile_id=? ORDER BY content",
+            ("A",),
+        ).fetchall()
+    by_content = {r["content"]: r["updated_at"] for r in rows}
+    assert by_content["Mistral 项目可以推进,约一下"] == "2026-05-10T10:00:00+00:00"
+    assert by_content["OpenAI 项目可以推进,约一下"] == "2026-04-25T10:00:00+00:00"
+
+    # 注入 query 时间为 2026-05-12,两条都未过期(<30 天),较新的 Mistral 应排在 OpenAI 之前
+    query_now = datetime(2026, 5, 12, tzinfo=timezone.utc)
+    result = mgr.get_context("A", "项目 推进", limit=2, now=query_now)
+    assert len(result) == 2
+    contents = [r["content"] for r in result]
+    assert contents[0].startswith("Mistral"), f"较新的应排第一,实际顺序 {contents}"

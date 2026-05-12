@@ -21,6 +21,17 @@ def _new_id() -> str:
     return str(uuid.uuid4())
 
 
+def _resolve_ts(message_ts: Optional[str], now: Optional[datetime]) -> str:
+    """优先尊重调用方传入的 created_at,fallback 到注入的 now,再兜底 utcnow。
+
+    把 ISO8601 的 Z 后缀归一化为 +00:00,保证 Python 3.10 的 datetime.fromisoformat
+    能解析(3.11+ 才原生支持 Z)。
+    """
+    if message_ts:
+        return message_ts.replace("Z", "+00:00") if message_ts.endswith("Z") else message_ts
+    return _utc_now(now).isoformat()
+
+
 class MemoryManager:
     """投资经理 Bot 的轻量记忆管理器。"""
 
@@ -38,7 +49,7 @@ class MemoryManager:
         if not profile_id or not text:
             raise ValueError("message 必须包含 profile_id 与 message 字段")
 
-        ts = _utc_now(now).isoformat()
+        ts = _resolve_ts(message.get("created_at"), now)
         raw = RawMessage(
             message_id=_new_id(),
             profile_id=profile_id,

@@ -82,6 +82,7 @@ add_feedback(message)
 - **去重命中后只累加 weight,不覆盖 content**:原始 content 是用户的真实表达,有信息价值;weight 同时充当"反复强调"的信号,在后续打分中体现。
 - **冲突检测为什么这么轻**:同 profile + 实体交集 + 类型对立——三个条件已经足够精准,不会误伤"OpenAI 不错 / OpenAI 估值高"(positive 和 negative 不在冲突对里,因为 PM 完全可能既觉得好又嫌贵)。只在 advance ↔ negative 这种明确决策反转上做 supersede,避免错误覆盖。
 - **保留 raw_messages**:即使精炼后的 memory 改了、被 superseded 了,原始反馈仍可追溯,方便审计和后续训练数据回流。
+- **created_at 字段优先级**:`add_feedback` 优先使用调用方传入的 `message["created_at"]`(支持 `2026-05-09T10:00:00Z` 这种 Z 后缀,内部归一化为 `+00:00` 以兼容 Python 3.10 的 `datetime.fromisoformat`),fallback 到 `now` 参数(测试注入用),最后兜底 `utcnow()`。这样能正确反映"反馈实际产生的时间",而不是"被写入的时间",`recency_decay` 才有意义。
 
 ### 3.3 检索排序逻辑
 
@@ -176,7 +177,7 @@ mock 的好处:
 
 ## 7. 测试覆盖
 
-`tests/test_memory.py` 共 6 个用例,全部使用 `tmp_path` fixture 共享干净 DB;TTL 用例通过 `now` 参数注入未来时间。
+`tests/test_memory.py` 共 7 个用例,全部使用 `tmp_path` fixture 共享干净 DB;时间相关用例通过 `now` 参数 / `message["created_at"]` 注入。
 
 | # | 用例 | 覆盖意图 |
 |---|---|---|
@@ -186,6 +187,7 @@ mock 的好处:
 | 4 | `test_dedup_no_infinite_duplicates` | 同一条反馈加 10 次,DB 中只有 1 条 memory,且 `weight=10` |
 | 5 | `test_ttl_expiration` | `temp_status` 写入后 10 天再查,记忆已落 `expired` 状态,不被返回 |
 | 6 | `test_conflict_resolution` | 先 advance(Anthropic 可以推进)再 negative(Anthropic 商业化弱),旧记录被 `superseded` |
+| 7 | `test_respects_caller_provided_created_at` | 题目要求消息至少包含 `created_at`,验证它被尊重并参与 `recency_decay` 排序 |
 
 ---
 
